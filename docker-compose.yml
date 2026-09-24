@@ -1,0 +1,83 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Your_strong_Pass123"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"Your_strong_Pass123\" -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  accounts-api:
+    build:
+      context: .
+      dockerfile: src/Accounts/BankCore.Accounts.API/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Database__Provider: SqlServer
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=BankCore.Accounts;User Id=sa;Password=Your_strong_Pass123;TrustServerCertificate=True"
+      Messaging__Transport: RabbitMq
+      Messaging__RabbitMq__Host: rabbitmq
+    ports:
+      - "8081:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  transactions-api:
+    build:
+      context: .
+      dockerfile: src/Transactions/BankCore.Transactions.API/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Database__Provider: SqlServer
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=BankCore.Transactions;User Id=sa;Password=Your_strong_Pass123;TrustServerCertificate=True"
+      Messaging__Transport: RabbitMq
+      Messaging__RabbitMq__Host: rabbitmq
+    ports:
+      - "8082:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: src/Gateway/BankCore.Gateway/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ReverseProxy__Clusters__accounts__Destinations__d1__Address: "http://accounts-api:8080/"
+      ReverseProxy__Clusters__transactions__Destinations__d1__Address: "http://transactions-api:8080/"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - accounts-api
+      - transactions-api
+
+volumes:
+  sqlserver-data:
