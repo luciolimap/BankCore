@@ -1,23 +1,69 @@
+using BankCore.Transactions.Application.Services;
+using BankCore.Transactions.Domain.Exceptions;
+using BankCore.Transactions.Infrastructure;
+using BankCore.Transactions.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
 builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<TransactionService>();
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(options =>
 {
-    app.MapOpenApi();
-}
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "BankCore Transactions API v1");
+});
 
-app.UseHttpsRedirection();
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var exception = feature?.Error;
 
-app.UseAuthorization();
+        var (statusCode, title) = exception switch
+        {
+            InvalidAmountException or InvalidTransferException or InvalidTransactionStateTransitionException
+                => (StatusCodes.Status409Conflict, exception.Message),
+            _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred.")
+        };
+
+        context.Response.StatusCode = statusCode;
+        await context.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title
+        });
+    });
+});
 
 app.MapControllers();
 
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "transactions-api" }));
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<TransactionsDbContext>();
+
+    if (db.Database.IsSqlServer())
+    {
+        await db.Database.MigrateAsync();
+    }
+    else
+    {
+        await db.Database.EnsureCreatedAsync();
+    }
+}
+
 app.Run();
+
+public partial class Program;
